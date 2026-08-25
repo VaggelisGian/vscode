@@ -6,9 +6,9 @@
 import assert from 'assert';
 import { UriIdentityService } from '../../common/uriIdentityService.js';
 import { mock } from '../../../../base/test/common/mock.js';
-import { IFileService, FileSystemProviderCapabilities } from '../../../files/common/files.js';
+import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderRegistrationEvent } from '../../../files/common/files.js';
 import { URI } from '../../../../base/common/uri.js';
-import { Event } from '../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 
 suite('URI Identity', function () {
@@ -177,6 +177,34 @@ suite('URI Identity', function () {
 			const uri2 = _service.asCanonicalUri(uri);
 
 			assert.ok(uri2);
+		}
+	});
+
+	test('asCanonicalUri (invalidates cache on provider registration)', function () {
+
+		const emitter = new Emitter<IFileSystemProviderRegistrationEvent>();
+		const data = new Map<string, FileSystemProviderCapabilities>();
+		class FiringFakeFileService extends FakeFileService {
+			override onDidChangeFileSystemProviderRegistrations = emitter.event;
+		}
+		const service = new UriIdentityService(new FiringFakeFileService(data));
+
+		try {
+			// no provider for the scheme yet, casing matters
+			const before = service.asCanonicalUri(URI.parse('casing://bar/bang'));
+			assert.strictEqual(before.toString(), 'casing://bar/bang');
+
+			// registering a case-insensitive provider must invalidate the cache
+			data.set('casing', FileSystemProviderCapabilities.None);
+			emitter.fire({ added: true, scheme: 'casing' });
+
+			// the all-lowercase path keeps its comparison key and must not resolve to the stale entry anymore
+			const canonical = service.asCanonicalUri(URI.parse('casing://bar/bang'));
+			assert.notStrictEqual(canonical, before);
+			assert.strictEqual(service.asCanonicalUri(URI.parse('casing://bar/BANG')), canonical);
+		} finally {
+			service.dispose();
+			emitter.dispose();
 		}
 	});
 });
